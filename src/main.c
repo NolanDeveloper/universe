@@ -29,17 +29,20 @@ static GLint geometry_shader_id;
 static size_t width, height;
 static GLuint texture_id;
 
-#define NROWS 40 // 400
-#define NCOLS 40 // 400
-#define POINT_COUNT (NROWS * NCOLS)
-#define POINT_SIZE 0.05 //  0.001
-#define POINT_ROUNDNESS 10
-#define GRAV_CONSTANT 1e-10f
+#define NROWS 30 // 400
+#define NCOLS 30 // 400
+#define POINT_COUNT 100000
+#define POINT_SIZE 0.01f //  0.001
+#define GRAV_CONSTANT 5e-11f
 #define TIME_SPEED 1
-static float total_energy;
-static float velocities[POINT_COUNT][2];
-static float coords[POINT_COUNT][3];
-static float colors[POINT_COUNT][3];
+#define INITIAL_SPEED 3e-2f
+#define TOO_CLOSE 1e-6f
+static vec2 velocities[POINT_COUNT];
+static vec2 coords[POINT_COUNT];
+static vec3 colors[POINT_COUNT];
+
+static float masses[NROWS][NCOLS];
+static vec2 forces[NROWS][NCOLS];
 
 static bool read_file(const char *filename, char **content, bool is_binary, size_t max_size) {
     FILE *file = NULL;
@@ -182,37 +185,31 @@ static void initialize(void) {
     glBindVertexArray(vao_id);
     glEnableVertexAttribArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, coords_vbo_id);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, NULL);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, NULL);
     glEnableVertexAttribArray(1);
     glBindBuffer(GL_ARRAY_BUFFER, colors_vbo_id);
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, NULL);
 
     glProgramUniform1f(geometry_shader_id, 0, POINT_SIZE);
-    glProgramUniform1i(geometry_shader_id, 1, POINT_ROUNDNESS);
 
-    float top = 0.5f;
-    float bottom = -0.5f;
-    float left = -0.5f;
-    float right = 0.5f;
+    float s = 0.9f;
+    float top = s;
+    float bottom = -s;
+    float left = -s;
+    float right = s;
 
-    for (int y = 0; y < NROWS; ++y) {
-        for (int x = 0; x < NCOLS; ++x) {
-            int index = y * NCOLS + x;
-            coords[index][0] = left + (right - left) * x / NCOLS;
-            coords[index][1] = top + (bottom - top) * y / NROWS;
-            velocities[index][0] = randf(-1e-4, 1e-4);
-            velocities[index][1] = randf(-1e-4, 1e-4);
-        }
-    }
     for (int i = 0; i < POINT_COUNT; ++i) {
-        for (int j = i + 1; j < POINT_COUNT; ++j) {
-            float dx = coords[i][0] - coords[j][0];
-            float dy = coords[i][1] - coords[j][1];
-            float distance_squared = dx * dx + dy * dy;
-            total_energy += GRAV_CONSTANT / distance_squared;
-        }
+        float distance = randf(0.1f, s);
+        float angle = randf(0, 2 * GLM_PIf);
+        coords[i][0] = 1;
+        coords[i][1] = 0;
+        glm_vec2_rotate(coords[i], angle, coords[i]);
+        glm_vec2_scale(coords[i], distance, coords[i]);
+//        velocities[i][0] = randf(-INITIAL_SPEED, INITIAL_SPEED);
+//        velocities[i][1] = randf(-INITIAL_SPEED, INITIAL_SPEED);
+        glm_vec2_rotate(coords[i], GLM_PIf / 2, velocities[i]);
+        glm_vec2_scale_as(velocities[i], INITIAL_SPEED, velocities[i]);
     }
-    printf("energy: %g\n", total_energy);
     glBindBuffer(GL_ARRAY_BUFFER, coords_vbo_id);
     glBufferData(GL_ARRAY_BUFFER, sizeof(coords), &coords, GL_STREAM_DRAW);
 
@@ -254,84 +251,148 @@ static float clamp(float x, float bottom, float top) {
     return top;
 }
 
+static float rem(float a, float b) {
+    return a - floorf(a / b) * b;
+}
+
+static float mod(float a, float b) {
+    return a - truncf(a / b) * b;
+}
+
+static float repeat(float x, float bottom, float top) {
+    float integral;
+    float fraction = modf((x - bottom) / (top - bottom), &integral);
+    if (fraction < 0) {
+        fraction += 1;
+    }
+    return bottom + fraction * (top - bottom);
+}
+
 static void main_loop(void) {
     if (!prev_ticks) {
         prev_ticks = SDL_GetTicks();
     }
     long ticks = SDL_GetTicks();
     long delta_ticks = ticks - prev_ticks;
+    prev_ticks = ticks;
     float dt = TIME_SPEED * ((float) delta_ticks / 1000.);
 
-//    size_t n = sizeof(colors) / sizeof(colors[0]);
-//    for (size_t i = 0; i < n; ++i) {
-//        colors[i][0] = 0.5f + sinf(alpha + i) / 2;
-//        colors[i][1] = 0.5f + cosf(alpha + i) / 2;
-//        colors[i][2] = 0.5f + cosf(alpha + 0.5f + i) / 2;
-//    }
-//    glBindBuffer(GL_ARRAY_BUFFER, colors_vbo_id);
-//    glBufferData(GL_ARRAY_BUFFER, sizeof(colors), &colors, GL_STREAM_DRAW);
+    float left = coords[0][0];
+    float right = coords[0][0];
+    float bottom = coords[0][1];
+    float top = coords[0][1];
+    for (int i = 0; i < POINT_COUNT; ++i) {
+        coords[i][0] = repeat(coords[i][0], -1, 1);
+        coords[i][1] = repeat(coords[i][1], -1, 1);
+        if (coords[i][0] < left) {
+            left = coords[i][0];
+        }
+        if (right < coords[i][0]) {
+            right = coords[i][0];
+        }
+        if (coords[i][1] < bottom) {
+            bottom = coords[i][1];
+        }
+        if (top < coords[i][1]) {
+            top = coords[i][1];
+        }
+    }
 
-//    for (int y = 0; y < NROWS; ++y) {
-//        for (int x = 0; x < NCOLS; ++x) {
-//            int index = y * NCOLS + x;
-//            coords[index][0] = coords[index][0] + (float) (rand() % 1000 - 500) / 100000;
-//            coords[index][1] = coords[index][1] + (float) (rand() % 1000 - 500) / 100000;
-//        }
-//    }
-
-    float current_total_potential_energy = 0;
-    float current_total_kinetic_energy = 0;
+    for (int i = 0; i < NROWS; ++i) {
+        for (int j = 0; j < NCOLS; ++j) {
+            masses[i][j] = 0;
+        }
+    }
 
     for (int i = 0; i < POINT_COUNT; ++i) {
-        float acceleration[2] = { 0 };
-        for (int j = 0; j < POINT_COUNT; ++j) {
-            if (j == i) {
-                continue;
-            }
-            float i_to_j[2] = {
-                    coords[j][0] - coords[i][0],
-                    coords[j][1] - coords[i][1]
-            };
-            float distance_squared = i_to_j[0] * i_to_j[0] + i_to_j[1] * i_to_j[1];
-            if (distance_squared < 0.0000001f) {
-                distance_squared = 0.0000001f;
-            }
-            acceleration[0] += i_to_j[0] / distance_squared;
-            acceleration[1] += i_to_j[1] / distance_squared;
-
-            current_total_potential_energy += GRAV_CONSTANT / distance_squared;
+        int row = (int) ((coords[i][1] - bottom) / (top - bottom) * (float) NROWS);
+        int col = (int) ((coords[i][0] - left) / (right - left) * (float) NCOLS);
+        if (row < 0) {
+            row = 0;
         }
-        float abs_velocity_squared = velocities[i][0] * velocities[i][0] + velocities[i][1] * velocities[i][1];
-        current_total_kinetic_energy += abs_velocity_squared / 2;
-
-        float abs_velocity = 10000 * sqrtf(abs_velocity_squared);
-        colors[i][0] = clamp(abs_velocity, 0, 1);
-        colors[i][1] = clamp(abs_velocity, 0, 1);
-        colors[i][2] = clamp(abs_velocity, 0, 1);
-        acceleration[0] *= GRAV_CONSTANT;
-        acceleration[1] *= GRAV_CONSTANT;
-        coords[i][0] += velocities[i][0] * dt;
-        coords[i][1] += velocities[i][1] * dt;
-        velocities[i][0] += acceleration[0] * dt;
-        velocities[i][1] += acceleration[1] * dt;
+        if (NROWS - 1 < row) {
+            row = NROWS - 1;
+        }
+        if (col < 0) {
+            col = 0;
+        }
+        if (NCOLS - 1 < col) {
+            col = NCOLS - 1;
+        }
+        ++masses[row][col];
     }
 
-    static int counter = 0;
-    ++counter;
-    if (0 == counter % 40) {
-        printf("energy: %10g\tpotential: %10g\tkinetic: %10g\n",
-               current_total_potential_energy + current_total_kinetic_energy,
-               current_total_potential_energy, current_total_kinetic_energy);
+    for (int i1 = 0; i1 < NROWS; ++i1) {
+        for (int j1 = 0; j1 < NCOLS; ++j1) {
+            vec2 center1 = {
+                    left + (right - left) / NCOLS * ((float) j1 + 0.5f),
+                    bottom + (top - bottom) / NROWS * ((float) i1 + 0.5f),
+            };
+            glm_vec2_zero(forces[i1][j1]);
+            for (int i2 = 0; i2 < NROWS; ++i2) {
+                for (int j2 = 0; j2 < NCOLS; ++j2) {
+                    if (i2 == i1 && j2 == j1) {
+                        continue;
+                    }
+                    vec2 center2 = {
+                            left + (right - left) / NCOLS * ((float) j2 + 0.5f),
+                            bottom + (top - bottom) / NROWS * ((float) i2 + 0.5f),
+                    };
+                    float distance_squared = glm_vec2_distance2(center1, center2);
+                    if (distance_squared < TOO_CLOSE) {
+                        distance_squared = TOO_CLOSE;
+                    }
+                    float force_value = masses[i1][j1] * masses[i2][j2] / distance_squared;
+                    vec2 force;
+                    glm_vec2_sub(center2, center1, force);
+                    glm_vec2_normalize(force);
+                    glm_vec2_scale(force, force_value, force);
+                    glm_vec2_add(forces[i1][j1], force, forces[i1][j1]);
+                }
+            }
+            glm_vec2_scale(forces[i1][j1], GRAV_CONSTANT, forces[i1][j1]);
+        }
     }
 
-//    if (1e-8 < total_absolute_velocity) {
-//        float velocity_error = -total_absolute_velocity;
-//        for (int i = 0; i < POINT_COUNT; ++i) {
-//            float fix_factor = 1 + velocity_error / total_absolute_velocity;
-//            velocities[i][0] *= fix_factor;
-//            velocities[i][1] *= fix_factor;
-//        }
-//    }
+    for (int i = 0; i < POINT_COUNT; ++i) {
+        int row = (int) ((coords[i][1] - bottom) / (top - bottom) * (float) NROWS);
+        int col = (int) ((coords[i][0] - left) / (right - left) * (float) NCOLS);
+        if (row < 0) {
+            row = 0;
+        }
+        if (NROWS - 1 < row) {
+            row = NROWS - 1;
+        }
+        if (col < 0) {
+            col = 0;
+        }
+        if (NCOLS - 1 < col) {
+            col = NCOLS - 1;
+        }
+        vec2 center = {
+                left + (right - left) / NCOLS * ((float) col + 0.5f),
+                bottom + (top - bottom) / NROWS * ((float) row + 0.5f),
+        };
+        vec2 to_center;
+        glm_vec2_sub(center, coords[i], to_center);
+        float distance_squared = glm_vec2_norm2(to_center);
+        if (distance_squared < TOO_CLOSE) {
+            distance_squared = TOO_CLOSE;
+        }
+        vec2 center_force;
+        glm_vec2_scale_as(to_center, GRAV_CONSTANT * masses[row][col] / distance_squared, center_force);
+        vec2 delta_velocity;
+        glm_vec2(forces[row][col], delta_velocity);
+        if (1 < masses[row][col]) {
+            glm_vec2_add(delta_velocity, center_force, delta_velocity);
+        }
+        glm_vec2_scale(delta_velocity, dt, delta_velocity);
+        glm_vec2_add(velocities[i], delta_velocity, velocities[i]);
+        vec2 delta_coord;
+        glm_vec2(velocities[i], delta_coord);
+        glm_vec2_scale(delta_coord, dt, delta_coord);
+        glm_vec2_add(coords[i], delta_coord, coords[i]);
+    }
 
     glBindBuffer(GL_ARRAY_BUFFER, colors_vbo_id);
     glBufferData(GL_ARRAY_BUFFER, sizeof(colors), &colors, GL_DYNAMIC_DRAW);

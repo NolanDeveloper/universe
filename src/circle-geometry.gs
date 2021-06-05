@@ -8,7 +8,6 @@ out vec3 FragColor;
 out vec2 TextureCoord;
 
 layout (location = 0) uniform float PointSize;
-layout (location = 1) uniform int   PointCount;
 
 #define PI (4 * atan(1.))
 
